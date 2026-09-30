@@ -24,6 +24,15 @@ it('offers only the OpenAI-compatible providers for each scope', () => {
   expect(MOBILE_PROVIDER_IDS).toEqual(['openai', 'groq', 'openrouter', 'custom']);
 });
 
+it('does not offer the Compound systems Groq shut down', () => {
+  // Groq retired both on 2026-09-21 (https://console.groq.com/docs/deprecations).
+  const groq = getMobileProvidersForScope('cleanup').find((provider) => provider.id === 'groq');
+  const modelIds = groq?.models.map((model) => model.id) ?? [];
+  expect(modelIds).not.toContain('groq/compound');
+  expect(modelIds).not.toContain('groq/compound-mini');
+  expect(modelIds.length).toBeGreaterThan(0);
+});
+
 it('refuses providers outside the mobile allowlist', () => {
   expect(
     resolveMobileInferenceRoute({
