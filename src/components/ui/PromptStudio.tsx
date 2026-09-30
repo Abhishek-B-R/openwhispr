@@ -76,6 +76,10 @@ export default function PromptStudio({ className = "", kind = "cleanup" }: Promp
   const isCloudMode = selectIsCloudCleanupMode(effectiveSettings);
   const useCleanupModel = effectiveSettings.useCleanupModel;
   const cleanupModel = effectiveSettings.cleanupModel;
+  // Self-hosted cleanup dispatches to its own endpoint whatever the model id
+  // says, and runs without a model, so the id must not pick the provider here.
+  const isSelfHostedCleanup = !isCloudMode && effectiveSettings.cleanupMode === "self-hosted";
+  const cleanupRemoteUrl = effectiveSettings.cleanupRemoteUrl;
 
   const isCloudDictationAgent = selectIsCloudDictationAgentMode(effectiveSettings);
   const useDictationAgent = effectiveSettings.useDictationAgent;
@@ -218,7 +222,9 @@ export default function PromptStudio({ className = "", kind = "cleanup" }: Promp
 
       const cleanupProvider = isCloudMode
         ? "openwhispr"
-        : (cleanupModel && getModelProvider(cleanupModel)) || "openai";
+        : isSelfHostedCleanup
+          ? "self-hosted"
+          : (cleanupModel && getModelProvider(cleanupModel)) || "openai";
 
       logger.debug(
         "PromptStudio test starting",
@@ -238,7 +244,12 @@ export default function PromptStudio({ className = "", kind = "cleanup" }: Promp
         return;
       }
 
-      if (!isCloudMode && !cleanupModel) {
+      if (isSelfHostedCleanup && !cleanupRemoteUrl?.trim()) {
+        setTestResult(t("notes.actions.errors.noEndpoint"));
+        return;
+      }
+
+      if (!isCloudMode && !isSelfHostedCleanup && !cleanupModel) {
         setTestResult(t("promptStudio.test.noModelSelected"));
         return;
       }
@@ -473,7 +484,9 @@ export default function PromptStudio({ className = "", kind = "cleanup" }: Promp
                 ? scopeProvider
                 : testIsCloud
                   ? "openwhispr"
-                  : scopeProvider || (testModel && getModelProvider(testModel)) || "openai";
+                  : isSelfHostedCleanup
+                    ? "self-hosted"
+                    : scopeProvider || (testModel && getModelProvider(testModel)) || "openai";
             const providerConfig = PROVIDER_CONFIG[testProvider] || {
               label: testProvider.charAt(0).toUpperCase() + testProvider.slice(1),
             };
