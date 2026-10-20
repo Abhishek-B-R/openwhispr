@@ -93,19 +93,20 @@ async function renderLinearRow(
   const { createRoot } = require("react-dom/client");
   root = createRoot(container);
   await React.act(async () =>
-    root.render(
-      React.createElement(ConnectorLoginRow, { row, isPaid, blockedByOrg, onUpgrade() {} })
-    )
+    root.render(React.createElement(ConnectorLoginRow, { row, isPaid, blockedByOrg }))
   );
   // Let the status load from the mount effect commit.
   await React.act(async () => {});
   return { container, row, rows: CONNECTOR_ROWS };
 }
 
-test("the Linear row comes last and names the user and the workspace", async (t) => {
+test("the Linear row comes just before GitHub and names the user and the workspace", async (t) => {
   const { container, row, rows } = await renderLinearRow(t, { status: LINEAR });
 
-  assert.equal(rows.at(-1).id, "linear");
+  assert.deepEqual(
+    rows.slice(-2).map((entry) => entry.id),
+    ["linear", "github"]
+  );
   assert.deepEqual(row.accountSummary(LINEAR), { account: "Dana", workspace: "Acme" });
   assert.deepEqual(row.accountSummary(DISCONNECTED), { account: "", workspace: "" });
   assert.match(container.textContent, /connectors\.linear\.title/);
@@ -169,10 +170,10 @@ test("a free plan can still disconnect a Linear login it has", async (t) => {
   assert.equal(hasButton(connected.container, "connectors.linear.connect"), false);
 });
 
-test("a free plan without a Linear login sees the upsell and no Connect", async (t) => {
+test("a free plan without a Linear login still sees what Linear does, with no button", async (t) => {
   const { container } = await renderLinearRow(t, { status: DISCONNECTED, isPaid: false });
-  assert.match(container.textContent, /connectors\.linear\.proRequired/);
-  assert.equal(hasButton(container, "integrations.api.viewPlans"), true);
+  assert.match(container.textContent, /connectors\.linear\.description/);
+  assert.equal(hasButton(container, "integrations.api.viewPlans"), false);
   assert.equal(hasButton(container, "connectors.linear.connect"), false);
 });
 

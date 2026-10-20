@@ -232,7 +232,7 @@ test("the auth generation is read before the header lookup", async () => {
   assert.deepEqual(expected, [1]);
 });
 
-test("a slow refresh still falls back to the cached verdict for the same request", async () => {
+test("an auth change during lookup cannot reuse the previous account cached verdict", async () => {
   const { createConnectorPolicyResolver } = await load();
   let generation = 4;
   const peeked = [];
@@ -250,8 +250,8 @@ test("a slow refresh still falls back to the cached verdict for the same request
     timeoutMs: 20,
   });
 
-  assert.equal(await resolver({}), "allowed");
-  assert.deepEqual(peeked, [4]);
+  assert.equal(await resolver({}), "unavailable");
+  assert.deepEqual(peeked, []);
 });
 
 test("the auth lookup never reads a destroyed window as signed out", async () => {
@@ -723,4 +723,77 @@ test("a query reaches the manager with the call's auth; malformed requests don't
     assert.deepEqual(await query({}, ...bad), { status: "unavailable", reason: "invalid_request" });
   }
   assert.equal(calls.length, 1);
+});
+
+test("cancelling a connect needs no policy, and a malformed id never reaches the manager", async () => {
+  const { registerConnectorIpc } = await load();
+  const ipcMain = fakeIpcMain();
+  const cancels = [];
+  const manager = {
+    ...fakeManager(),
+    cancelConnect: (connectorId) => {
+      cancels.push(connectorId);
+      return { status: "cancelled" };
+    },
+  };
+  let policyCalls = 0;
+  registerConnectorIpc({
+    ipcMain,
+    manager,
+    getPolicyState: async () => {
+      policyCalls += 1;
+      return "blocked";
+    },
+  });
+  const cancel = ipcMain.handlers.get("connector-cancel-connect");
+
+  assert.deepEqual(await cancel({}, "github"), { status: "cancelled" });
+  for (const bad of [undefined, "", 7, { id: "github" }]) {
+    assert.deepEqual(await cancel({}, bad), { status: "unavailable", reason: "invalid_request" });
+  }
+
+  assert.deepEqual(cancels, ["github"]);
+  assert.equal(policyCalls, 0);
+});
+
+// Leaving Settings mid policy wait must not leave a device flow polling for
+// 15 minutes with nothing on screen.
+test("a cancel during the policy wait stops the connect before the manager starts it", async () => {
+  const { registerConnectorIpc } = await load();
+  const ipcMain = fakeIpcMain();
+  const calls = [];
+  const manager = {
+    ...fakeManager(),
+    connect: async (...args) => {
+      calls.push(["connect", ...args]);
+      return { status: "connected" };
+    },
+    cancelConnect: (connectorId) => {
+      calls.push(["cancelConnect", connectorId]);
+      return { status: "idle" };
+    },
+  };
+  const policyWaits = [];
+  registerConnectorIpc({
+    ipcMain,
+    manager,
+    getPolicyState: () => new Promise((resolve) => policyWaits.push(resolve)),
+  });
+  const h = (channel) => ipcMain.handlers.get(channel);
+
+  const githubConnect = h("connector-connect")({}, "github");
+  const slackConnect = h("connector-connect")({}, "slack");
+  assert.deepEqual(await h("connector-cancel-connect")({}, "github"), { status: "cancelled" });
+
+  for (const resolve of policyWaits) resolve("allowed");
+  assert.deepEqual(await githubConnect, { status: "failed", errorCode: "oauth_cancelled" });
+  // Only that connector's connect is stopped, and one that got through is
+  // left to the manager's own cancel.
+  assert.deepEqual(await slackConnect, { status: "connected" });
+  assert.deepEqual(await h("connector-cancel-connect")({}, "github"), { status: "idle" });
+  assert.deepEqual(calls, [
+    ["cancelConnect", "github"],
+    ["connect", "slack", "allowed"],
+    ["cancelConnect", "github"],
+  ]);
 });

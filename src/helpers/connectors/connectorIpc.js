@@ -57,6 +57,8 @@ function createConnectorPolicyResolver({
   peekPolicy,
   getAuthGeneration,
   timeoutMs = POLICY_TIMEOUT_MS,
+  classifySnapshot = connectorPolicyState,
+  fallbackOnUnavailable = false,
 }) {
   // The deadline and the failure handling cover the whole resolution,
   // including the auth-header lookup: nothing here can hang or throw.
@@ -74,7 +76,9 @@ function createConnectorPolicyResolver({
       // Assigned before the fetch: the deadline's fallback peeks this request.
       request = { expectedAuthGeneration, authHeaders };
       const snapshot = await getPolicy(request);
-      return connectorPolicyState(snapshot);
+      return expectedAuthGeneration === getAuthGeneration()
+        ? classifySnapshot(snapshot)
+        : "unavailable";
     })().catch(() => "unavailable");
 
     let timer;
@@ -83,11 +87,13 @@ function createConnectorPolicyResolver({
     });
     try {
       const state = await Promise.race([resolution, deadline]);
-      if (state !== null) return state;
+      if (state !== null && !(fallbackOnUnavailable && state === "unavailable")) return state;
       // A refresh that outlives the deadline must not override the verdict
       // already held for this account; with none held, fail closed.
       try {
-        return request && peekPolicy ? connectorPolicyState(peekPolicy(request)) : "unavailable";
+        return request && request.expectedAuthGeneration === getAuthGeneration() && peekPolicy
+          ? classifySnapshot(peekPolicy(request))
+          : "unavailable";
       } catch {
         return "unavailable";
       }
@@ -204,9 +210,39 @@ function registerConnectorIpc({
     return manager.recentActions(connectorId, limit, getAccountScope()?.accountId ?? null);
   });
 
+  // Connects still waiting on policy, before the manager holds them. A cancel
+  // that lands then must stop them there: nothing else would end a device
+  // flow that then polls for 15 minutes with nothing on screen.
+  const pendingConnects = new Set();
+
   ipcMain.handle("connector-connect", async (event, connectorId) => {
     if (!isNonEmptyString(connectorId)) return { status: "unavailable", reason: "invalid_request" };
-    return manager.connect(connectorId, await getPolicyState(event));
+    const pending = { connectorId, controller: new AbortController() };
+    pendingConnects.add(pending);
+    let policyState;
+    try {
+      policyState = await getPolicyState(event);
+    } finally {
+      pendingConnects.delete(pending);
+    }
+    // What an aborted flow reports, so the row stays silent.
+    if (pending.controller.signal.aborted) {
+      return { status: "failed", errorCode: "oauth_cancelled" };
+    }
+    return manager.connect(connectorId, policyState);
+  });
+
+  // Stopping a connect is always allowed, so it skips the policy check too.
+  ipcMain.handle("connector-cancel-connect", (_event, connectorId) => {
+    if (!isNonEmptyString(connectorId)) return { status: "unavailable", reason: "invalid_request" };
+    let stoppedPending = false;
+    for (const pending of pendingConnects) {
+      if (pending.connectorId !== connectorId) continue;
+      pending.controller.abort();
+      stoppedPending = true;
+    }
+    const result = manager.cancelConnect(connectorId);
+    return stoppedPending ? { status: "cancelled" } : result;
   });
 
   // Removing access is always allowed, so disconnect skips the policy check.

@@ -30,18 +30,22 @@ const MOCKS = {
         conversationId: null,
         messages: [],
         setMessages() {},
-        createConversation: async () => 1,
+        createConversation: async () => {
+          globalThis.__createCount += 1;
+          return 1;
+        },
         saveUserMessage: async () => {},
         saveAssistantMessage() {},
-        loadConversation: async () => {},
+        loadConversation: async () => globalThis.__loadResult,
         handleNewChat() {},
       };
     }
   `,
   "/ChatInput": `
+    import { createElement } from "react";
     export function ChatInput(props) {
       globalThis.__chatInput = props;
-      return null;
+      return createElement("textarea");
     }
   `,
   "/ConversationList": `
@@ -51,8 +55,6 @@ const MOCKS = {
     }
   `,
   "/ChatMessages": `export function ChatMessages() { return null; }`,
-  "/ChatEmptyIllustration": `export function ChatEmptyIllustration() { return null; }`,
-  "/EmptyChatState": `export default function EmptyChatState() { return null; }`,
   "/ui/dialog": `export function ConfirmDialog() { return null; }`,
   "/hooks/useDialogs": `
     export function useDialogs() {
@@ -69,11 +71,24 @@ async function renderChatView(t) {
     delete globalThis.__chatInput;
     delete globalThis.__conversationList;
     delete globalThis.__cancelCount;
+    delete globalThis.__createCount;
+    delete globalThis.__loadResult;
     delete globalThis.__chatStreamingOptions;
+    delete globalThis.__keydown;
   });
-  installBrowserGlobals(t);
+  installBrowserGlobals(t, {
+    window: {
+      addEventListener(type, listener) {
+        if (type === "keydown") {
+          globalThis.__keydown = (init) => listener({ preventDefault() {}, ...init });
+        }
+      },
+      removeEventListener() {},
+    },
+  });
   const container = installInteractiveDom(t);
   globalThis.__cancelCount = 0;
+  globalThis.__createCount = 0;
   const vite = await createRendererServer(t, {
     cachePrefix: "openwhispr-chat-view-new-chat-test-",
     mockModules: MOCKS,
@@ -115,5 +130,32 @@ for (const [leave, leaveConversation] of Object.entries(LEAVE_CONVERSATION)) {
 
     await React.act(async () => settleSend());
     assert.equal(globalThis.__chatInput.agentState, "idle");
+  });
+}
+
+test("a follow-up after reopening a deleted conversation starts a new one", async (t) => {
+  globalThis.__loadResult = null;
+  await renderChatView(t);
+
+  await React.act(async () => globalThis.__conversationList.onSelectConversation(7));
+  await React.act(async () => globalThis.__chatInput.onTextSubmit("A follow-up"));
+
+  assert.equal(globalThis.__createCount, 1);
+});
+
+// The composer stays collapsed until focused, so nothing focuses it when the page opens;
+// starting a new chat is the moment the user means to type.
+const START_NEW_CHAT = {
+  "the New chat button": () => globalThis.__conversationList.onNewChat(),
+  "the shortcut": () => globalThis.__keydown({ key: "n", metaKey: true, ctrlKey: true }),
+};
+
+for (const [way, startNewChat] of Object.entries(START_NEW_CHAT)) {
+  test(`starting a new chat with ${way} puts the cursor in the composer`, async (t) => {
+    await renderChatView(t);
+    assert.equal(globalThis.document.activeElement, null);
+
+    await React.act(async () => startNewChat());
+    assert.equal(globalThis.document.activeElement?.tagName, "TEXTAREA");
   });
 }
