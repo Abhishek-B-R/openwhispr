@@ -875,8 +875,11 @@
         "apikeyHelp": "从 Google AI Studio 获取的 Vertex AI Express Mode API 密钥。"
       }
     },
+    "modelRetiredTitle": "模型已不可用",
+    "groq": {
+      "modelRetired": "Groq 已停用 {{from}}，已切换至 {{to}}。"
+    },
     "tinfoil": {
-      "modelRetiredTitle": "模型已不可用",
       "modelRetired": "Tinfoil 已停用 {{from}}，已切换至 {{to}}。",
       "refreshingModels": "正在刷新模型…"
     },

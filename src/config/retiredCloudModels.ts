@@ -23,11 +23,11 @@ export interface RetiredProviderModels {
   models: Record<string, string>;
 }
 
-export const RETIRED_CLOUD_MODELS: Record<string, RetiredProviderModels> = {
-  // qwen3-32b and both Llamas retired 2026-08-16 under the original key, which
-  // predates this table. Groq shut down both Compound systems on 2026-09-21
-  // with no named successor, and they had shipped in the picker, so adding
-  // them rotated the key.
+export const RETIRED_CLOUD_MODELS = {
+  // qwen3-32b and both Llamas (retired 2026-08-16) were swept under the
+  // original key, which predates this table. Groq shut down both Compound
+  // systems on 2026-09-21 with no named successor; installed builds had
+  // already written that key, so adding them rotated it.
   groq: {
     migratedKey: "_retiredGroqModelsMigrated2",
     models: {
@@ -53,7 +53,9 @@ export const RETIRED_CLOUD_MODELS: Record<string, RetiredProviderModels> = {
       "kimi-k2-6": "kimi-k3",
     },
   },
-};
+} satisfies Record<string, RetiredProviderModels>;
+
+export type RetiredModelProvider = keyof typeof RETIRED_CLOUD_MODELS;
 
 interface RetiredModelStorage {
   getItem(key: string): string | null;
@@ -67,7 +69,7 @@ interface ScopeStorageKeys {
 
 export interface SweptModelSelection {
   storeKey: string;
-  provider: string;
+  provider: RetiredModelProvider;
   from: string;
   to: string;
 }
@@ -82,7 +84,8 @@ export function sweepRetiredCloudModelSelections(
 ): SweptModelSelection[] {
   const swept: SweptModelSelection[] = [];
 
-  for (const [providerId, entry] of Object.entries(RETIRED_CLOUD_MODELS)) {
+  for (const providerId of Object.keys(RETIRED_CLOUD_MODELS) as RetiredModelProvider[]) {
+    const entry: RetiredProviderModels = RETIRED_CLOUD_MODELS[providerId];
     try {
       if (storage.getItem(entry.migratedKey) === "1") continue;
 

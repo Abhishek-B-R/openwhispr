@@ -69,16 +69,19 @@ test("still remaps the models Groq retired", async () => {
 test("remaps the Compound systems Groq shut down, even after the first Groq sweep ran", async () => {
   const { sweepRetiredCloudModelSelections } = await load();
   // Groq shut down groq/compound and groq/compound-mini on 2026-09-21, after
-  // shipped builds had already written the original Groq sentinel.
+  // shipped builds had already written the original Groq sentinel. The rotated
+  // key also re-sweeps the August ids, which is harmless: they are retired too.
   const storage = makeStorage({
     _retiredGroqModelsMigrated: "1",
     cleanupProvider: "groq",
     cleanupModel: "groq/compound",
     chatAgentProvider: "groq",
     chatAgentModel: "groq/compound-mini",
+    noteFormattingProvider: "groq",
+    noteFormattingModel: "llama-3.3-70b-versatile",
   });
 
-  assert.deepEqual(sweepRetiredCloudModelSelections(storage, [CLEANUP, CHAT]), [
+  assert.deepEqual(sweepRetiredCloudModelSelections(storage, [CLEANUP, CHAT, NOTES]), [
     {
       storeKey: "cleanupModel",
       provider: "groq",
@@ -90,6 +93,12 @@ test("remaps the Compound systems Groq shut down, even after the first Groq swee
       provider: "groq",
       from: "groq/compound-mini",
       to: "openai/gpt-oss-20b",
+    },
+    {
+      storeKey: "noteFormattingModel",
+      provider: "groq",
+      from: "llama-3.3-70b-versatile",
+      to: "openai/gpt-oss-120b",
     },
   ]);
   assert.equal(storage.map.get("_retiredGroqModelsMigrated2"), "1");

@@ -875,8 +875,11 @@
         "apikeyHelp": "Vertex AI Express Mode API key from Google AI Studio."
       }
     },
+    "modelRetiredTitle": "Model no longer available",
+    "groq": {
+      "modelRetired": "Groq retired {{from}}. Switched to {{to}}."
+    },
     "tinfoil": {
-      "modelRetiredTitle": "Model no longer available",
       "modelRetired": "Tinfoil retired {{from}}. Switched to {{to}}.",
       "refreshingModels": "Refreshing models…"
     },

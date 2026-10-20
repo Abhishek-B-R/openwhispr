@@ -875,8 +875,11 @@
         "apikeyHelp": "Clé API Vertex AI Express Mode obtenue depuis Google AI Studio."
       }
     },
+    "modelRetiredTitle": "Modèle non disponible",
+    "groq": {
+      "modelRetired": "Groq a retiré {{from}}. Basculé vers {{to}}."
+    },
     "tinfoil": {
-      "modelRetiredTitle": "Modèle non disponible",
       "modelRetired": "Tinfoil a retiré {{from}}. Basculé vers {{to}}.",
       "refreshingModels": "Actualisation des modèles…"
     },

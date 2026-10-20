@@ -509,8 +509,11 @@
         "apikeyHelp": "مفتاح Vertex AI Express Mode API من Google AI Studio."
       }
     },
+    "modelRetiredTitle": "النموذج لم يعد متاحًا",
+    "groq": {
+      "modelRetired": "قام Groq بإيقاف {{from}}. تم التبديل إلى {{to}}."
+    },
     "tinfoil": {
-      "modelRetiredTitle": "النموذج لم يعد متاحًا",
       "modelRetired": "قام Tinfoil بإيقاف {{from}}. تم التبديل إلى {{to}}.",
       "refreshingModels": "جاري تحديث النماذج..."
     },
