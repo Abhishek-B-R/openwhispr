@@ -1,10 +1,11 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useId } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Upload,
   FileAudio,
   X,
   AlertCircle,
+  AlertTriangle,
   ArrowRight,
   FolderOpen,
   Plus,
@@ -36,6 +37,7 @@ import {
   findVideosFolder,
   DOWNLOAD_ERROR_KEYS,
   transcriptionErrorKey,
+  uploadRestrictionKey,
   MEETINGS_FOLDER_NAME,
 } from "./shared";
 import { useAuth } from "../../hooks/useAuth";
@@ -74,7 +76,7 @@ import { MAX_SPEAKER_COUNT } from "../../constants/speakerDetection.json";
 import BatchQueueView from "./BatchQueueView";
 import { generateNoteTitle } from "../../utils/generateTitle";
 import { getBaseLanguageCode } from "../../utils/languageSupport";
-import { isTranscriptionContextAllowed } from "../../stores/policyRules";
+import { isAudioFeatureAllowed, isTranscriptionContextAllowed } from "../../stores/policyRules";
 import { usePolicyStore } from "../../stores/policyStore";
 import { usePolicySnapshot, useTranscriptionContextAllowed } from "../../hooks/usePolicy";
 import { byokFileSizeLimit, resolveTranscriptionRoute } from "../../helpers/transcriptionRoute";
@@ -304,6 +306,10 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
     )
   );
   const uploadAllowedByPolicy = useTranscriptionContextAllowed("upload");
+  // The org's upload switch, which the banner explains and the inputs follow.
+  const uploadFeatureAllowed = isAudioFeatureAllowed(policyState, "upload");
+  const uploadRestrictionId = useId();
+  const uploadRestrictionDescription = uploadFeatureAllowed ? undefined : uploadRestrictionId;
 
   const setUploadTranscriptionMode = useSettingsStore((s) => s.setUploadTranscriptionMode);
   const setUploadCloudTranscriptionMode = useSettingsStore(
@@ -552,6 +558,7 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
   };
 
   const handleBrowse = async () => {
+    if (!isAudioFeatureAllowed(usePolicyStore.getState(), "upload")) return;
     const res = await window.electronAPI.selectAudioFile({ multiple: true });
     if (res.canceled) return;
 
@@ -581,6 +588,7 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
+    if (!isAudioFeatureAllowed(usePolicyStore.getState(), "upload")) return;
     const files = e.dataTransfer.files;
     if (!files || files.length === 0) return;
 
@@ -645,8 +653,7 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
   };
 
   const cancelTranscription = () => {
-    // True backend abort for cloud and local uploads; the run-id bump still
-    // discards any late result from providers that can't be aborted (BYOK).
+    // Abort the provider request and discard late results from a cancelled run.
     if (activeRequestIdRef.current) {
       window.electronAPI.cancelUploadTranscription?.(activeRequestIdRef.current);
       activeRequestIdRef.current = null;
@@ -654,11 +661,37 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
     runIdRef.current++;
     reset();
   };
+  useEffect(() => {
+    return usePolicyStore.subscribe((policy) => {
+      if (isAudioFeatureAllowed(policy, "upload")) return;
+      const active = activeRequestIdRef.current || singleDownloadIdRef.current;
+      runIdRef.current++;
+      if (active) {
+        if (progressRef.current) clearInterval(progressRef.current);
+        progressCleanupRef.current?.();
+        progressCleanupRef.current = null;
+        setState("error");
+        setError(t(uploadRestrictionKey(policy)));
+      }
+      if (activeRequestIdRef.current) {
+        window.electronAPI.cancelUploadTranscription?.(activeRequestIdRef.current);
+        activeRequestIdRef.current = null;
+      }
+      if (singleDownloadIdRef.current)
+        window.electronAPI.cancelUrlDownload(singleDownloadIdRef.current);
+    });
+  }, [t]);
+
   const handleTranscribe = async () => {
     if (!file || batch.isProcessing) return;
+    const policy = usePolicyStore.getState();
+    if (!isAudioFeatureAllowed(policy, "upload")) {
+      setError(t(uploadRestrictionKey(policy)));
+      return;
+    }
     if (
       !isManagedTranscriptionActive() &&
-      !isTranscriptionContextAllowed(usePolicyStore.getState(), getSettings(), "upload")
+      !isTranscriptionContextAllowed(policy, getSettings(), "upload")
     ) {
       setError(t("common.managedByOrg"));
       return;
@@ -707,9 +740,7 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
         diarization,
         currentFile.durationSeconds,
         { requestId, timestamps: true }
-      ).finally(() => {
-        if (activeRequestIdRef.current === requestId) activeRequestIdRef.current = null;
-      });
+      );
 
       if (runId !== runIdRef.current) return;
 
@@ -781,10 +812,13 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
         );
       }
       setState("error");
+    } finally {
+      if (activeRequestIdRef.current === requestId) activeRequestIdRef.current = null;
     }
   };
 
   const handleUrlSubmit = async () => {
+    if (!isAudioFeatureAllowed(usePolicyStore.getState(), "upload")) return;
     const trimmed = urlInput.trim();
     if (!trimmed) return;
 
@@ -885,6 +919,7 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
   };
 
   const handleBatchUrlSubmit = () => {
+    if (!isAudioFeatureAllowed(usePolicyStore.getState(), "upload")) return;
     const { valid, skipped } = parseBatchUrls(urlInput);
     if (valid.length > 0) {
       batch.addUrls(valid);
@@ -901,9 +936,14 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
 
   const startBatchProcessing = async () => {
     if (state === "downloading" || state === "transcribing") return;
+    const policy = usePolicyStore.getState();
+    if (!isAudioFeatureAllowed(policy, "upload")) {
+      setSkippedNotice(t(uploadRestrictionKey(policy)));
+      return;
+    }
     if (
       !isManagedTranscriptionActive() &&
-      !isTranscriptionContextAllowed(usePolicyStore.getState(), getSettings(), "upload")
+      !isTranscriptionContextAllowed(policy, getSettings(), "upload")
     ) {
       setSkippedNotice(t("common.managedByOrg"));
       return;
@@ -970,6 +1010,19 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
         className={cn(PAGE_CONTENT_WIDTH_CLASS, "px-6 py-8 shrink-0 my-auto")}
         style={{ animation: "float-up 0.4s ease-out" }}
       >
+        {!uploadFeatureAllowed && (
+          <p
+            id={uploadRestrictionId}
+            role="status"
+            className="mb-5 flex items-center justify-center gap-2 rounded-lg border border-warning/20 bg-warning/8 px-4 py-3 text-sm text-amber-700 dark:bg-warning/10 dark:text-warning/90"
+          >
+            <AlertTriangle
+              aria-hidden="true"
+              className="w-3.5 h-3.5 shrink-0 text-amber-600 dark:text-warning"
+            />
+            {t(uploadRestrictionKey(policyState))}
+          </p>
+        )}
         {state === "idle" && providerReady === false && (
           <NoProviderView t={t} onOpenSettings={() => onOpenSettings?.("uploadTranscription")} />
         )}
@@ -984,6 +1037,8 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
               isDragOver={isDragOver}
               setIsDragOver={setIsDragOver}
               onOpenSettings={onOpenSettings}
+              disabled={!uploadFeatureAllowed}
+              describedBy={uploadRestrictionDescription}
             />
 
             <div className="my-5 flex items-center gap-3">
@@ -994,7 +1049,7 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
               <div className="h-px flex-1 bg-border/70 dark:bg-white/10" />
             </div>
 
-            {urlExpanded ? (
+            {urlExpanded && uploadFeatureAllowed ? (
               <div>
                 <textarea
                   dir="ltr"
@@ -1071,16 +1126,18 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
                     }
                   }}
                   placeholder={t("notes.upload.urlPlaceholder")}
-                  className="h-11 w-full rounded-full! pl-11 pr-12 text-sm placeholder:text-foreground/45"
+                  disabled={!uploadFeatureAllowed}
+                  aria-describedby={uploadRestrictionDescription}
+                  className="h-11 w-full rounded-full! pl-11 pr-12 text-sm placeholder:text-foreground/45 disabled:cursor-not-allowed disabled:opacity-50"
                 />
                 <button
                   onClick={handleUrlSubmit}
-                  disabled={!urlInput.trim()}
+                  disabled={!uploadFeatureAllowed || !urlInput.trim()}
                   aria-label={t("notes.upload.urlSubmit")}
                   className={cn(
                     "absolute right-1.5 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-full transition-[filter,transform] duration-100",
                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
-                    urlInput.trim()
+                    uploadFeatureAllowed && urlInput.trim()
                       ? cn(GRADIENT_CIRCLE, "hover:brightness-110 active:scale-95")
                       : "bg-muted text-muted-foreground"
                   )}
@@ -1114,7 +1171,7 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
               }
             />
 
-            {!batch.isProcessing && batch.queue.some((i) => i.status === "queued") && (
+            {!batch.isProcessing && batch.hasPending && (
               <div className="mt-4 flex flex-col items-center gap-3">
                 {folders.length > 0 && (
                   <FolderSelect
@@ -1453,6 +1510,8 @@ interface IdleViewProps {
   isDragOver: boolean;
   setIsDragOver: (v: boolean) => void;
   onOpenSettings?: (section: string) => void;
+  disabled: boolean;
+  describedBy?: string;
 }
 
 function IdleView({
@@ -1463,6 +1522,8 @@ function IdleView({
   isDragOver,
   setIsDragOver,
   onOpenSettings,
+  disabled,
+  describedBy,
 }: IdleViewProps) {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") {
@@ -1489,10 +1550,12 @@ function IdleView({
         role="button"
         tabIndex={0}
         aria-label={t("notes.upload.dropOrBrowse")}
+        aria-disabled={disabled || undefined}
+        aria-describedby={describedBy}
         onDrop={handleDrop}
         onDragOver={(e) => {
           e.preventDefault();
-          setIsDragOver(true);
+          if (!disabled) setIsDragOver(true);
         }}
         onDragLeave={(e) => {
           e.preventDefault();
@@ -1501,12 +1564,14 @@ function IdleView({
         onClick={handleBrowse}
         onKeyDown={handleKeyDown}
         className={cn(
-          "group mt-6 flex cursor-pointer flex-col items-center rounded-2xl border border-dashed px-6 py-12 text-center",
+          "group mt-6 flex flex-col items-center rounded-2xl border border-dashed px-6 py-12 text-center",
           "transition-[background-color,border-color,transform] duration-200",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
-          isDragOver
-            ? "scale-[1.01] border-primary/60 bg-primary/5 dark:bg-primary/10"
-            : "border-border bg-card/50 hover:border-primary/40 hover:bg-primary/5 dark:border-white/15 dark:bg-surface-2/60 dark:hover:bg-primary/10"
+          disabled
+            ? "cursor-not-allowed border-border bg-card/50 opacity-50 dark:border-white/15 dark:bg-surface-2/60"
+            : isDragOver
+              ? "cursor-pointer scale-[1.01] border-primary/60 bg-primary/5 dark:bg-primary/10"
+              : "cursor-pointer border-border bg-card/50 hover:border-primary/40 hover:bg-primary/5 dark:border-white/15 dark:bg-surface-2/60 dark:hover:bg-primary/10"
         )}
         style={isDragOver ? { animation: "drag-pulse 1.5s ease-in-out infinite" } : undefined}
       >
@@ -1515,7 +1580,7 @@ function IdleView({
             "flex h-11 w-11 items-center justify-center rounded-xl transition-colors",
             isDragOver
               ? "bg-primary/15 text-primary"
-              : "bg-surface-3 text-foreground/70 group-hover:text-primary"
+              : cn("bg-surface-3 text-foreground/70", !disabled && "group-hover:text-primary")
           )}
         >
           <Upload size={20} />
